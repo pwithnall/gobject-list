@@ -22,9 +22,12 @@
  *     Danielle Madeley  <danielle.madeley@collabora.co.uk>
  *     Philip Withnall  <philip.withnall@collabora.co.uk>
  */
+
 #include <glib-object.h>
+#include <gio/gio.h>
 
 #include <dlfcn.h>
+#include <execinfo.h>
 #include <signal.h>
 #include <string.h>
 #include <stdlib.h>
@@ -168,6 +171,39 @@ print_trace (void)
     }
 }
 
+/* Get additional, type-specific debug information for an object.
+ * Return value must be freed with g_free(). */
+static gchar *
+object_get_additional_debug (GObject *obj)
+{
+  GType t;
+  gchar *retval = NULL;
+
+  t = G_OBJECT_TYPE (obj);
+
+  if (t == G_TYPE_TASK) {
+    GTask *task;
+    gpointer sym;
+    char **sym_names;
+
+    /* Print source tag. */
+    task = G_TASK (obj);
+    sym = g_task_get_source_tag (task);
+    sym_names = backtrace_symbols (&sym, 1);
+
+    if (sym_names == NULL) {
+      return NULL;
+    }
+
+    retval = g_strdup_printf ("(%p, %s)", g_task_get_source_object (task),
+        sym_names[0]);
+
+    free (sym_names);
+  }
+
+  return retval;
+}
+
 static void
 _dump_object_list (GHashTable *hash)
 {
@@ -177,12 +213,20 @@ _dump_object_list (GHashTable *hash)
   g_hash_table_iter_init (&iter, hash);
   while (g_hash_table_iter_next (&iter, (gpointer) &obj, NULL))
     {
+      gchar *additional = NULL;
+
       /* FIXME: Not really sure how we get to this state. */
       if (obj == NULL || obj->ref_count == 0)
         continue;
 
-      g_print (" - %p, %s: %u refs\n",
-          obj, G_OBJECT_TYPE_NAME (obj), obj->ref_count);
+      additional = object_get_additional_debug (obj);
+
+      g_print (" - %p, %s: %u refs%s%s\n",
+          obj, G_OBJECT_TYPE_NAME (obj), obj->ref_count,
+          (additional != NULL) ? " " : "",
+          (additional != NULL) ? additional : "");
+
+      g_free (additional);
     }
   g_print ("%u objects\n", g_hash_table_size (hash));
 #endif
